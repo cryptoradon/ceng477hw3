@@ -17,6 +17,16 @@ using namespace std;
 
 GLuint gProgram;
 int gWidth, gHeight;
+vector<vector<int>> colors{{37, 45, 63}, {229, 107, 197}, {232, 203, 185}, {113, 153, 104}, {95, 31, 137}};
+
+struct Candy {
+    int colorID;
+};
+
+struct {
+    int width, height;
+    vector<vector<Candy>> candies; 
+} grid;
 
 struct Vertex
 {
@@ -371,10 +381,9 @@ void initVBO()
 }
 
 
-void init() 
+void init(string objectFile) 
 {
-	ParseObj("armadillo.obj");
-	//ParseObj("bunny.obj");
+	ParseObj(objectFile);
 
     glEnable(GL_DEPTH_TEST);
     initShaders();
@@ -449,6 +458,16 @@ void mainLoop(GLFWwindow* window)
 
 int main(int argc, char** argv)   // Create Main Function For Bringing It All Together
 {
+    if (argc != 4){
+        cout << "Incorrect argument count, usage is ./hw3 <grid_width> <grid_height> <object_file>!" << endl;
+        return 0;
+    }
+    
+    grid.width = atoi(argv[1]);
+    grid.height = atoi(argv[2]);
+    string objectFile = argv[3];
+
+
     GLFWwindow* window;
     if (!glfwInit())
     {
@@ -485,7 +504,7 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
     strcat(rendererInfo, (const char*) glGetString(GL_VERSION));
     glfwSetWindowTitle(window, rendererInfo);
 
-    init();
+    init(objectFile);
 
     glfwSetKeyCallback(window, keyboard);
     glfwSetWindowSizeCallback(window, reshape);
