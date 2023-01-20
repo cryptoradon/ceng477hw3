@@ -10,22 +10,31 @@
 #include <GL/glew.h>   // The GL Header File
 #include <GL/gl.h>   // The GL Header File
 #include <GLFW/glfw3.h> // The GLFW header
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #define BUFFER_OFFSET(i) ((char*)NULL + (i))
 
 using namespace std;
 
-GLuint gProgram;
+GLuint gProgram[2];
+GLint gIntensityLoc;
+float gIntensity = 1000;
 int gWidth, gHeight;
 vector<vector<int>> colors{{37, 45, 63}, {229, 107, 197}, {232, 203, 185}, {113, 153, 104}, {95, 31, 137}};
 
 struct Candy {
     int colorID;
+    bool visible = true;
+    int shiftAmount = 0;
 };
 
 struct {
     int width, height;
-    vector<vector<Candy>> candies; 
+    vector<vector<Candy>> candies;
+    int moves = 0;
+    int score = 0;
 } grid;
 
 struct Vertex
@@ -238,11 +247,10 @@ bool ReadDataFromFile(
     return true;
 }
 
-void createVS()
+void createVS(GLuint& gProgram, const string& filename)
 {
     string shaderSource;
 
-    string filename("vert.glsl");
     if (!ReadDataFromFile(filename, shaderSource))
     {
         cout << "Cannot find file name: " + filename << endl;
@@ -263,11 +271,10 @@ void createVS()
     glAttachShader(gProgram, vs);
 }
 
-void createFS()
+void createFS(GLuint& gProgram, const string& filename)
 {
     string shaderSource;
 
-    string filename("frag.glsl");
     if (!ReadDataFromFile(filename, shaderSource))
     {
         cout << "Cannot find file name: " + filename << endl;
@@ -290,22 +297,37 @@ void createFS()
 
 void initShaders()
 {
-    gProgram = glCreateProgram();
+    gProgram[0] = glCreateProgram();
+    gProgram[1] = glCreateProgram();
 
-    createVS();
-    createFS();
+    createVS(gProgram[0], "vert0.glsl");
+    createFS(gProgram[0], "frag0.glsl");
 
-    glLinkProgram(gProgram);
-    glUseProgram(gProgram);
+    createVS(gProgram[1], "vert1.glsl");
+    createFS(gProgram[1], "frag1.glsl");
+
+    glBindAttribLocation(gProgram[0], 0, "inVertex");
+    glBindAttribLocation(gProgram[0], 1, "inNormal");
+    glBindAttribLocation(gProgram[1], 0, "inVertex");
+    glBindAttribLocation(gProgram[1], 1, "inNormal");
+
+    glLinkProgram(gProgram[0]);
+    glLinkProgram(gProgram[1]);
+    glUseProgram(gProgram[0]);
+
+    gIntensityLoc = glGetUniformLocation(gProgram[0], "intensity");
+    cout << "gIntensityLoc = " << gIntensityLoc << endl;
+    glUniform1f(gIntensityLoc, gIntensity);
 }
 
 void initVBO()
 {
+    /* comment out since it does not exist in text model
     GLuint vao;
     glGenVertexArrays(1, &vao);
     assert(vao > 0);
     glBindVertexArray(vao);
-    cout << "vao = " << vao << endl;
+    cout << "vao = " << vao << endl;*/
 
 	glEnableVertexAttribArray(0);
 	glEnableVertexAttribArray(1);
@@ -410,9 +432,41 @@ void display()
 
 	static float angle = 0;
 
-	glLoadIdentity();
-	glTranslatef(0, 0, -10);
-	glRotatef(angle, 0, 1, 0);
+	for(int i=0; i<grid.height; i++)  {
+	    for(int j=0; j<grid.width; j++) {
+            glUseProgram(gProgram[0]);
+	    }
+	}
+    glUseProgram(gProgram[0]);
+    //glLoadIdentity();
+	//glTranslatef(0, 0, -10);
+	//glRotatef(angle, 0, 1, 0);
+
+    glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3(-2.f, 0.f, -10.f));
+    glm::mat4 R = glm::rotate(glm::mat4(1.f), glm::radians(angle), glm::vec3(0, 1, 0));
+    glm::mat4 modelMat = T * R;
+    glm::mat4 modelMatInv = glm::transpose(glm::inverse(modelMat));
+    glm::mat4 perspMat = glm::perspective(glm::radians(45.0f), 1.f, 1.0f, 100.0f);
+
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[0], "modelingMat"), 1, GL_FALSE, glm::value_ptr(modelMat));
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[0], "modelingMatInvTr"), 1, GL_FALSE, glm::value_ptr(modelMatInv));
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[0], "perspectiveMat"), 1, GL_FALSE, glm::value_ptr(perspMat));
+
+    drawModel();
+
+    glUseProgram(gProgram[1]);
+    //glLoadIdentity();
+    //glTranslatef(2, 0, -10);
+    //glRotatef(-angle, 0, 1, 0);
+
+    T = glm::translate(glm::mat4(1.f), glm::vec3(2.f, 0.f, -10.f));
+    R = glm::rotate(glm::mat4(1.f), glm::radians(-angle), glm::vec3(0, 1, 0));
+    modelMat = T * R;
+    modelMatInv = glm::transpose(glm::inverse(modelMat));
+
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[1], "modelingMat"), 1, GL_FALSE, glm::value_ptr(modelMat));
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[1], "modelingMatInvTr"), 1, GL_FALSE, glm::value_ptr(modelMatInv));
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[1], "perspectiveMat"), 1, GL_FALSE, glm::value_ptr(perspMat));
 
     drawModel();
 
@@ -428,14 +482,14 @@ void reshape(GLFWwindow* window, int w, int h)
     gHeight = h;
 
     glViewport(0, 0, w, h);
-
+/* comment out since it does not exist in text model
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     //glOrtho(-10, 10, -10, 10, -10, 10);
     gluPerspective(45, 1, 1, 100);
 
     glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+    glLoadIdentity();*/
 }
 
 void keyboard(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -456,6 +510,34 @@ void mainLoop(GLFWwindow* window)
     }
 }
 
+
+// reference: https://www.glfw.org/docs/3.3/input_guide.html#input_mouse
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods){
+    /*if(button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
+        double xpos, ypos;
+        glfwGetCursorPos(window, &xpos, &ypos);
+
+        std::cout<<"cursor position at: xpos: "<<xpos<<" ypos: "<<ypos<<std::endl;
+        for (int i = 0; i < grid.height; i++) { // once column icin girdik
+            for (int j = 0; j < grid.width; j++) {
+                double candyxpos = grid.candies[i][j].xpos;
+                double candyypos = grid.candies[i][j].ypos;
+                std::cout<<candyxpos<<" "<<candyypos<<std::endl;
+                if(candyxpos - 15 < xpos && xpos < candyxpos+15 && candyypos - 15 < ypos && ypos < candyypos+15){
+                    grid.candies[i][j].selected = true;
+                    moves++;
+                    std::cout<<"selected: "<<i<<" "<<j<<std::endl;
+                }
+            }
+        }
+    }*/
+}
+
+
+int getRandomColorIndex(int colorCount) {
+    return (rand() % colorCount);
+}
+
 int main(int argc, char** argv)   // Create Main Function For Bringing It All Together
 {
     if (argc != 4){
@@ -466,7 +548,17 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
     grid.width = atoi(argv[1]);
     grid.height = atoi(argv[2]);
     string objectFile = argv[3];
-
+    grid.candies.resize(grid.height);
+    for (int i = 0; i < grid.height; i++) {
+        grid.candies[i].resize(grid.width);
+    }
+    for (int i = 0; i < grid.height; i++) {
+        for (int j = 0; j < grid.width; j++) {
+            Candy candy = new Candy();
+            candy.colorID = getRandomColorIndex(5);
+            grid.candies[i][j] = candy;
+        }
+    }
 
     GLFWwindow* window;
     if (!glfwInit())
@@ -474,12 +566,12 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
         exit(-1);
     }
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
     //glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-    int width = 640, height = 480;
+    int width = 640, height = 600;
     window = glfwCreateWindow(width, height, "Simple Example", NULL, NULL);
 
     if (!window)
@@ -508,6 +600,7 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
 
     glfwSetKeyCallback(window, keyboard);
     glfwSetWindowSizeCallback(window, reshape);
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
 
     reshape(window, width, height); // need to call this once ourselves
     mainLoop(window); // this does not return unless the window is closed
