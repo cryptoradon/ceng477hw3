@@ -18,16 +18,17 @@
 
 using namespace std;
 
-GLuint gProgram[2];
+GLuint gProgram[6];
 GLint gIntensityLoc;
 float gIntensity = 1000;
 int gWidth, gHeight;
 vector<vector<int>> colors{{37, 45, 63}, {229, 107, 197}, {232, 203, 185}, {113, 153, 104}, {95, 31, 137}};
+float scaleCoef = 1.0;
 
 struct Candy {
     int colorID;
-    bool visible = true;
-    int shiftAmount = 0;
+    bool visible;
+    int shiftAmount;
 };
 
 struct {
@@ -35,6 +36,9 @@ struct {
     vector<vector<Candy>> candies;
     int moves = 0;
     int score = 0;
+    vector<vector<GLuint>> colorMap; // to slide candies when explosion occur
+    int correctCandyCount;
+    vector<vector<int>> needToDisappear; // each inside vector holds which candy clicked or need to explode
 } grid;
 
 struct Vertex
@@ -247,7 +251,7 @@ bool ReadDataFromFile(
     return true;
 }
 
-void createVS(GLuint& gProgram, const string& filename)
+void createVS(GLuint& gProgramm, const string& filename)
 {
     string shaderSource;
 
@@ -268,10 +272,10 @@ void createVS(GLuint& gProgram, const string& filename)
     glGetShaderInfoLog(vs, 1024, &length, output);
     printf("VS compile log: %s\n", output);
 
-    glAttachShader(gProgram, vs);
+    glAttachShader(gProgramm, vs);
 }
 
-void createFS(GLuint& gProgram, const string& filename)
+void createFS(GLuint& gProgramm, const string& filename)
 {
     string shaderSource;
 
@@ -292,13 +296,17 @@ void createFS(GLuint& gProgram, const string& filename)
     glGetShaderInfoLog(fs, 1024, &length, output);
     printf("FS compile log: %s\n", output);
 
-    glAttachShader(gProgram, fs);
+    glAttachShader(gProgramm, fs);
 }
 
 void initShaders()
 {
     gProgram[0] = glCreateProgram();
     gProgram[1] = glCreateProgram();
+    gProgram[2] = glCreateProgram();
+    gProgram[3] = glCreateProgram();
+    gProgram[4] = glCreateProgram();
+    gProgram[5] = glCreateProgram();
 
     createVS(gProgram[0], "vert0.glsl");
     createFS(gProgram[0], "frag0.glsl");
@@ -306,13 +314,37 @@ void initShaders()
     createVS(gProgram[1], "vert1.glsl");
     createFS(gProgram[1], "frag1.glsl");
 
+    createVS(gProgram[2], "vert2.glsl");
+    createFS(gProgram[2], "frag2.glsl");
+
+    createVS(gProgram[3], "vert3.glsl");
+    createFS(gProgram[3], "frag3.glsl");
+
+    createVS(gProgram[4], "vert4.glsl");
+    createFS(gProgram[4], "frag4.glsl");
+
+    createVS(gProgram[5], "vert5.glsl");
+    createFS(gProgram[5], "frag5.glsl");
+
     glBindAttribLocation(gProgram[0], 0, "inVertex");
     glBindAttribLocation(gProgram[0], 1, "inNormal");
     glBindAttribLocation(gProgram[1], 0, "inVertex");
     glBindAttribLocation(gProgram[1], 1, "inNormal");
+    glBindAttribLocation(gProgram[2], 0, "inVertex");
+    glBindAttribLocation(gProgram[2], 1, "inNormal");
+    glBindAttribLocation(gProgram[3], 0, "inVertex");
+    glBindAttribLocation(gProgram[3], 1, "inNormal");
+    glBindAttribLocation(gProgram[4], 0, "inVertex");
+    glBindAttribLocation(gProgram[4], 1, "inNormal");
+    glBindAttribLocation(gProgram[5], 0, "inVertex");
+    glBindAttribLocation(gProgram[5], 1, "inNormal");
 
     glLinkProgram(gProgram[0]);
     glLinkProgram(gProgram[1]);
+    glLinkProgram(gProgram[2]);
+    glLinkProgram(gProgram[3]);
+    glLinkProgram(gProgram[4]);
+    glLinkProgram(gProgram[5]);
     glUseProgram(gProgram[0]);
 
     gIntensityLoc = glGetUniformLocation(gProgram[0], "intensity");
@@ -402,14 +434,30 @@ void initVBO()
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(gVertexDataSizeInBytes));
 }
 
+int getRandomColorIndex(int colorCount) {
+    return (rand() % colorCount);
+}
 
 void init(string objectFile) 
 {
+    //cout << objectFile;
 	ParseObj(objectFile);
 
     glEnable(GL_DEPTH_TEST);
     initShaders();
     initVBO();
+    for (int i = 0; i < grid.height; i++) {
+        for (int j = 0; j < grid.width; j++) {
+            struct Candy candy;
+            candy.colorID = getRandomColorIndex(6);
+            candy.visible = true;
+            candy.shiftAmount = 0;
+            grid.candies[i][j] = candy;
+            GLuint gluint = gProgram[candy.colorID];
+            grid.colorMap[i][j] = gluint;
+            //cout << gluint << endl;
+        }
+    }
 }
 
 void drawModel()
@@ -431,44 +479,97 @@ void display()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 	static float angle = 0;
+	float translate = 0;
+	grid.correctCandyCount = 0;
+    //cout << scaleCoef << endl;
+	// if exploding objects reach scaling coefficient 1.5
+    if(scaleCoef >= 1.5) {
+        scaleCoef = 1.0;
 
-	for(int i=0; i<grid.height; i++)  {
+        // start from the leftmost column, check all columns if any shift needed
+        for(int i=0; i<grid.width; i++) {
+            int shiftInThisRow = 0;
+            for(int j=grid.height-1; j>=0; j--) {
+                // if current candy is not on where it should be
+                if(!grid.candies[j][i].visible || shiftInThisRow != 0) {
+                    // if current candy should stay, but should shift
+                    if(grid.candies[j][i].visible) {
+                        grid.candies[j+shiftInThisRow][i].colorID = grid.candies[j][i].colorID;
+                        grid.colorMap[j+shiftInThisRow][i] = grid.colorMap[j][i];
+                        grid.candies[j+shiftInThisRow][i].visible = true;
+                        // in total between top and bottom is 20. But 45/600 is reserved for text.
+                        // so text has 1.5/20. remaining 18.5 is reserved for candies.
+                        // 18.5 / candy in one row shows the shift amount for one shift
+                        grid.candies[j+shiftInThisRow][i].shiftAmount = 18.5*shiftInThisRow/grid.height;
+                    } else { // if current candy should be removed
+                        shiftInThisRow++;
+                    }
+                } else { // current candy is on where it should be
+                    grid.candies[j][i].shiftAmount = 0;
+                    continue;
+                }
+                // if j == 0, initialize all the candies needed
+                if(j == 0) {
+                    while(shiftInThisRow != 0) {
+                        struct Candy candy;
+                        candy.colorID = getRandomColorIndex(6);
+                        candy.visible = true;
+                        candy.shiftAmount = 18.5*shiftInThisRow/grid.height;
+                        grid.candies[shiftInThisRow-1][i] = candy;
+                        GLuint gluint = gProgram[candy.colorID];
+                        grid.colorMap[shiftInThisRow-1][i] = gluint;
+                        shiftInThisRow--;
+                    }
+                }
+            }
+        }
+
+    }
+
+	for(int i=0; i<grid.height; i++) {
 	    for(int j=0; j<grid.width; j++) {
-            glUseProgram(gProgram[0]);
-	    }
+            glUseProgram(grid.colorMap[i][j]);
+            // translation
+            if(grid.candies[i][j].shiftAmount > 0) {
+                translate = grid.candies[i][j].shiftAmount;
+                grid.candies[i][j].shiftAmount -= 0.05;
+            } else {
+                translate = 0;
+                grid.correctCandyCount += 1;
+            }
+
+            glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3((20 * (j+0.5f))/grid.width - 10.0f,
+                                                                   -(18.5 * (i+0.5f))/grid.height + 10.0f + translate,
+                                                                   -10.f));
+
+            // rotation
+            glm::mat4 R = glm::rotate(glm::mat4(1.f), glm::radians(angle), glm::vec3(0, 1, 0));
+
+            // scale
+            glm::mat4 scaleCoefficient = glm::scale(glm::mat4(1.f), glm::vec3(1.f, 1.f, 1.f));
+            if(!grid.candies[i][j].visible) { // if current candy should disappear, than use scaling coef
+                //cout << "were here" << endl;
+                scaleCoef += 0.01;
+                scaleCoefficient = glm::scale(glm::mat4(1.f), glm::vec3(scaleCoef, scaleCoef, scaleCoef));
+            } else {
+                scaleCoefficient = glm::scale(glm::mat4(1.f), glm::vec3(1.f, 1.f, 1.f));
+            }
+            glm::mat4 S = scaleCoefficient * glm::scale(glm::mat4(1.f), glm::vec3(0.5f, 0.5f, 0.5f));
+
+
+            glm::mat4 modelMat = T * R * S;
+            glm::mat4 modelMatInv = glm::transpose(glm::inverse(modelMat));
+            glm::mat4 orthoMat = glm::ortho(-10.f, 10.f, -10.f, 10.f, -20.f, 20.f);
+
+            glUniformMatrix4fv(glGetUniformLocation(grid.colorMap[i][j], "modelingMat"), 1, GL_FALSE, glm::value_ptr(modelMat));
+            glUniformMatrix4fv(glGetUniformLocation(grid.colorMap[i][j], "modelingMatInvTr"), 1, GL_FALSE, glm::value_ptr(modelMatInv));
+            glUniformMatrix4fv(glGetUniformLocation(grid.colorMap[i][j], "orthoMat"), 1, GL_FALSE, glm::value_ptr(orthoMat));
+
+            drawModel();
+
+            //assert(glGetError() == GL_NO_ERROR);
+        }
 	}
-    glUseProgram(gProgram[0]);
-    //glLoadIdentity();
-	//glTranslatef(0, 0, -10);
-	//glRotatef(angle, 0, 1, 0);
-
-    glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3(-2.f, 0.f, -10.f));
-    glm::mat4 R = glm::rotate(glm::mat4(1.f), glm::radians(angle), glm::vec3(0, 1, 0));
-    glm::mat4 modelMat = T * R;
-    glm::mat4 modelMatInv = glm::transpose(glm::inverse(modelMat));
-    glm::mat4 perspMat = glm::perspective(glm::radians(45.0f), 1.f, 1.0f, 100.0f);
-
-    glUniformMatrix4fv(glGetUniformLocation(gProgram[0], "modelingMat"), 1, GL_FALSE, glm::value_ptr(modelMat));
-    glUniformMatrix4fv(glGetUniformLocation(gProgram[0], "modelingMatInvTr"), 1, GL_FALSE, glm::value_ptr(modelMatInv));
-    glUniformMatrix4fv(glGetUniformLocation(gProgram[0], "perspectiveMat"), 1, GL_FALSE, glm::value_ptr(perspMat));
-
-    drawModel();
-
-    glUseProgram(gProgram[1]);
-    //glLoadIdentity();
-    //glTranslatef(2, 0, -10);
-    //glRotatef(-angle, 0, 1, 0);
-
-    T = glm::translate(glm::mat4(1.f), glm::vec3(2.f, 0.f, -10.f));
-    R = glm::rotate(glm::mat4(1.f), glm::radians(-angle), glm::vec3(0, 1, 0));
-    modelMat = T * R;
-    modelMatInv = glm::transpose(glm::inverse(modelMat));
-
-    glUniformMatrix4fv(glGetUniformLocation(gProgram[1], "modelingMat"), 1, GL_FALSE, glm::value_ptr(modelMat));
-    glUniformMatrix4fv(glGetUniformLocation(gProgram[1], "modelingMatInvTr"), 1, GL_FALSE, glm::value_ptr(modelMatInv));
-    glUniformMatrix4fv(glGetUniformLocation(gProgram[1], "perspectiveMat"), 1, GL_FALSE, glm::value_ptr(perspMat));
-
-    drawModel();
 
 	angle += 0.5;
 }
@@ -513,30 +614,22 @@ void mainLoop(GLFWwindow* window)
 
 // reference: https://www.glfw.org/docs/3.3/input_guide.html#input_mouse
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods){
-    /*if(button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
+    if(button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
         double xpos, ypos;
         glfwGetCursorPos(window, &xpos, &ypos);
-
-        std::cout<<"cursor position at: xpos: "<<xpos<<" ypos: "<<ypos<<std::endl;
-        for (int i = 0; i < grid.height; i++) { // once column icin girdik
-            for (int j = 0; j < grid.width; j++) {
-                double candyxpos = grid.candies[i][j].xpos;
-                double candyypos = grid.candies[i][j].ypos;
-                std::cout<<candyxpos<<" "<<candyypos<<std::endl;
-                if(candyxpos - 15 < xpos && xpos < candyxpos+15 && candyypos - 15 < ypos && ypos < candyypos+15){
-                    grid.candies[i][j].selected = true;
-                    moves++;
-                    std::cout<<"selected: "<<i<<" "<<j<<std::endl;
-                }
-            }
+        if(ypos <= 555){ // en alttaki 45 yazi icin ayrildi
+            int clickedCandyXIndex = xpos*grid.width/640;
+            int clickedCandyYIndex = ypos*grid.height/555;
+            grid.candies[clickedCandyYIndex][clickedCandyXIndex].visible = false;
+            vector<int> indexes;
+            indexes.push_back(clickedCandyYIndex);
+            indexes.push_back(clickedCandyXIndex);
+            grid.needToDisappear.push_back(indexes);
+            grid.moves += 1;
         }
-    }*/
+    }
 }
 
-
-int getRandomColorIndex(int colorCount) {
-    return (rand() % colorCount);
-}
 
 int main(int argc, char** argv)   // Create Main Function For Bringing It All Together
 {
@@ -548,16 +641,12 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
     grid.width = atoi(argv[1]);
     grid.height = atoi(argv[2]);
     string objectFile = argv[3];
+    grid.correctCandyCount = grid.width * grid.height;
     grid.candies.resize(grid.height);
+    grid.colorMap.resize(grid.height);
     for (int i = 0; i < grid.height; i++) {
         grid.candies[i].resize(grid.width);
-    }
-    for (int i = 0; i < grid.height; i++) {
-        for (int j = 0; j < grid.width; j++) {
-            Candy candy = new Candy();
-            candy.colorID = getRandomColorIndex(5);
-            grid.candies[i][j] = candy;
-        }
+        grid.colorMap[i].resize(grid.width);
     }
 
     GLFWwindow* window;
@@ -568,11 +657,11 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    //glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
     //glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
     int width = 640, height = 600;
-    window = glfwCreateWindow(width, height, "Simple Example", NULL, NULL);
+    window = glfwCreateWindow(width, height, "Candy Crush", NULL, NULL);
 
     if (!window)
     {
