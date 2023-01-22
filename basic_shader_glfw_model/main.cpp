@@ -473,6 +473,7 @@ void drawModel()
 
 void display()
 {
+    //cout << grid.score << endl;
     glClearColor(0, 0, 0, 1);
     glClearDepth(1.0f);
     glClearStencil(0);
@@ -481,7 +482,64 @@ void display()
 	static float angle = 0;
 	float translate = 0;
 	grid.correctCandyCount = 0;
-    //cout << scaleCoef << endl;
+
+	if(scaleCoef <= 1.0) {
+        // start from the leftmost column, check all columns if any points will be earn
+        for(int i=0; i<grid.width; i++) {
+            int currentStreak = 0;
+            for(int j=0; j<grid.height-1; j++) {
+                if(grid.candies[j][i].colorID == grid.candies[j+1][i].colorID) {
+                    currentStreak++;
+                    if(currentStreak == 2) {
+                        grid.candies[j-1][i].visible = false;
+                        grid.candies[j][i].visible = false;
+                        grid.candies[j+1][i].visible = false;
+                    } else if(currentStreak > 2) {
+                        grid.candies[j+1][i].visible = false;
+                    }
+                } else {
+                    currentStreak = 0;
+                }
+            }
+        }
+
+        // start from the upper row, check all rows if any points will be earn
+        for(int i=0; i<grid.height; i++) {
+            int currentStreak = 0;
+            for(int j=0; j<grid.width-1; j++) {
+                if(grid.candies[i][j].colorID == grid.candies[i][j+1].colorID) {
+                    currentStreak++;
+                    if(currentStreak == 2) {
+                        grid.candies[i][j-1].visible = false;
+                        grid.candies[i][j].visible = false;
+                        grid.candies[i][j+1].visible = false;
+                        //cout << "i: " << i << "j: " << j << endl;
+                    } else if(currentStreak > 2) {
+                        grid.candies[i][j+1].visible = false;
+                    }
+                } else {
+                    currentStreak = 0;
+                }
+            }
+        }
+
+        int tempScore = grid.score;
+        //calculate earned points
+        for(int i=0; i<grid.width; i++) {
+            for(int j=0; j<grid.height; j++) {
+                if(grid.candies[j][i].visible) {
+                    continue;
+                } else {
+                    grid.score += 1;
+                }
+            }
+        }
+        if(grid.score < tempScore+3) {
+            grid.score = tempScore;
+        }
+    }
+
+
 	// if exploding objects reach scaling coefficient 1.5
     if(scaleCoef >= 1.5) {
         scaleCoef = 1.0;
@@ -510,11 +568,12 @@ void display()
                 }
                 // if j == 0, initialize all the candies needed
                 if(j == 0) {
+                    float shift = 18.5*shiftInThisRow/grid.height;
                     while(shiftInThisRow != 0) {
                         struct Candy candy;
                         candy.colorID = getRandomColorIndex(6);
                         candy.visible = true;
-                        candy.shiftAmount = 18.5*shiftInThisRow/grid.height;
+                        candy.shiftAmount = shift;
                         grid.candies[shiftInThisRow-1][i] = candy;
                         GLuint gluint = gProgram[candy.colorID];
                         grid.colorMap[shiftInThisRow-1][i] = gluint;
@@ -523,9 +582,9 @@ void display()
                 }
             }
         }
-
     }
 
+    //draw model
 	for(int i=0; i<grid.height; i++) {
 	    for(int j=0; j<grid.width; j++) {
             glUseProgram(grid.colorMap[i][j]);
@@ -617,7 +676,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     if(button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
         double xpos, ypos;
         glfwGetCursorPos(window, &xpos, &ypos);
-        if(ypos <= 555){ // en alttaki 45 yazi icin ayrildi
+        if(ypos <= 555 && scaleCoef <= 1.0){ // en alttaki 45 yazi icin ayrildi
             int clickedCandyXIndex = xpos*grid.width/640;
             int clickedCandyYIndex = ypos*grid.height/555;
             grid.candies[clickedCandyYIndex][clickedCandyXIndex].visible = false;
