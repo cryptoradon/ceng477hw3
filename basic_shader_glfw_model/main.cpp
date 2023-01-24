@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <map>
 #include <vector>
 #include <GL/glew.h>   // The GL Header File
 #include <GL/gl.h>   // The GL Header File
@@ -13,13 +14,16 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #define BUFFER_OFFSET(i) ((char*)NULL + (i))
 
 using namespace std;
 
-GLuint gProgram[6];
+GLuint gProgram[7];
 GLint gIntensityLoc;
+GLuint gTextVBO;
 float gIntensity = 1000;
 int gWidth, gHeight;
 vector<vector<int>> colors{{37, 45, 63}, {229, 107, 197}, {232, 203, 185}, {113, 153, 104}, {95, 31, 137}};
@@ -38,7 +42,6 @@ struct {
     int score = 0;
     vector<vector<GLuint>> colorMap; // to slide candies when explosion occur
     int correctCandyCount;
-    vector<vector<int>> needToDisappear; // each inside vector holds which candy clicked or need to explode
     vector<vector<int>> currentlyShifting;
 } grid;
 
@@ -75,6 +78,16 @@ struct Face
 	}
     GLuint vIndex[3], tIndex[3], nIndex[3];
 };
+
+/// Holds all state information relevant to a character as loaded using FreeType
+struct Character {
+    GLuint TextureID;   // ID handle of the glyph texture
+    glm::ivec2 Size;    // Size of glyph
+    glm::ivec2 Bearing;  // Offset from baseline to left/top of glyph
+    GLuint Advance;    // Horizontal offset to advance to next glyph
+};
+
+std::map<GLchar, Character> Characters;
 
 vector<Vertex> gVertices;
 vector<Texture> gTextures;
@@ -176,45 +189,6 @@ bool ParseObj(const string& fileName)
         return false;
     }
 
-	/*
-	for (int i = 0; i < gVertices.size(); ++i)
-	{
-		Vector3 n;
-
-		for (int j = 0; j < gFaces.size(); ++j)
-		{
-			for (int k = 0; k < 3; ++k)
-			{
-				if (gFaces[j].vIndex[k] == i)
-				{
-					// face j contains vertex i
-					Vector3 a(gVertices[gFaces[j].vIndex[0]].x, 
-							  gVertices[gFaces[j].vIndex[0]].y,
-							  gVertices[gFaces[j].vIndex[0]].z);
-
-					Vector3 b(gVertices[gFaces[j].vIndex[1]].x, 
-							  gVertices[gFaces[j].vIndex[1]].y,
-							  gVertices[gFaces[j].vIndex[1]].z);
-
-					Vector3 c(gVertices[gFaces[j].vIndex[2]].x, 
-							  gVertices[gFaces[j].vIndex[2]].y,
-							  gVertices[gFaces[j].vIndex[2]].z);
-
-					Vector3 ab = b - a;
-					Vector3 ac = c - a;
-					Vector3 normalFromThisFace = (ab.cross(ac)).getNormalized();
-					n += normalFromThisFace;
-				}
-
-			}
-		}
-
-		n.normalize();
-
-		gNormals.push_back(Normal(n.x, n.y, n.z));
-	}
-	*/
-
 	assert(gVertices.size() == gNormals.size());
 
     return true;
@@ -308,6 +282,7 @@ void initShaders()
     gProgram[3] = glCreateProgram();
     gProgram[4] = glCreateProgram();
     gProgram[5] = glCreateProgram();
+    gProgram[6] = glCreateProgram();
 
     createVS(gProgram[0], "vert0.glsl");
     createFS(gProgram[0], "frag0.glsl");
@@ -327,6 +302,9 @@ void initShaders()
     createVS(gProgram[5], "vert5.glsl");
     createFS(gProgram[5], "frag5.glsl");
 
+    createVS(gProgram[6], "vert_text.glsl");
+    createFS(gProgram[6], "frag_text.glsl");
+
     glBindAttribLocation(gProgram[0], 0, "inVertex");
     glBindAttribLocation(gProgram[0], 1, "inNormal");
     glBindAttribLocation(gProgram[1], 0, "inVertex");
@@ -339,6 +317,7 @@ void initShaders()
     glBindAttribLocation(gProgram[4], 1, "inNormal");
     glBindAttribLocation(gProgram[5], 0, "inVertex");
     glBindAttribLocation(gProgram[5], 1, "inNormal");
+    glBindAttribLocation(gProgram[6], 2, "vertex");
 
     glLinkProgram(gProgram[0]);
     glLinkProgram(gProgram[1]);
@@ -346,6 +325,7 @@ void initShaders()
     glLinkProgram(gProgram[3]);
     glLinkProgram(gProgram[4]);
     glLinkProgram(gProgram[5]);
+    glLinkProgram(gProgram[6]);
     glUseProgram(gProgram[0]);
 
     gIntensityLoc = glGetUniformLocation(gProgram[0], "intensity");
@@ -435,6 +415,95 @@ void initVBO()
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, BUFFER_OFFSET(gVertexDataSizeInBytes));
 }
 
+void initFonts(int windowWidth, int windowHeight)
+{
+    // Set OpenGL options
+    //glEnable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glm::mat4 projection = glm::ortho(0.0f, static_cast<GLfloat>(windowWidth), 0.0f, static_cast<GLfloat>(windowHeight));
+    glUseProgram(gProgram[6]);
+    glUniformMatrix4fv(glGetUniformLocation(gProgram[6], "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+    // FreeType
+    FT_Library ft;
+    // All functions return a value different than 0 whenever an error occurred
+    if (FT_Init_FreeType(&ft))
+    {
+        std::cout << "ERROR::FREETYPE: Could not init FreeType Library" << std::endl;
+    }
+
+    // Load font as face
+    FT_Face face;
+    if (FT_New_Face(ft, "/usr/share/fonts/truetype/liberation/LiberationSerif-Italic.ttf", 0, &face))
+    {
+        std::cout << "ERROR::FREETYPE: Failed to load font" << std::endl;
+    }
+
+    // Set size to load glyphs as
+    FT_Set_Pixel_Sizes(face, 0, 48);
+
+    // Disable byte-alignment restriction
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); 
+
+    // Load first 128 characters of ASCII set
+    for (GLubyte c = 0; c < 128; c++)
+    {
+        // Load character glyph 
+        if (FT_Load_Char(face, c, FT_LOAD_RENDER))
+        {
+            std::cout << "ERROR::FREETYTPE: Failed to load Glyph" << std::endl;
+            continue;
+        }
+        // Generate texture
+        GLuint texture;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RED,
+                face->glyph->bitmap.width,
+                face->glyph->bitmap.rows,
+                0,
+                GL_RED,
+                GL_UNSIGNED_BYTE,
+                face->glyph->bitmap.buffer
+                );
+        // Set texture options
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // Now store character for later use
+        Character character = {
+            texture,
+            glm::ivec2(face->glyph->bitmap.width, face->glyph->bitmap.rows),
+            glm::ivec2(face->glyph->bitmap_left, face->glyph->bitmap_top),
+            face->glyph->advance.x
+        };
+        Characters.insert(std::pair<GLchar, Character>(c, character));
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    // Destroy FreeType once we're finished
+    FT_Done_Face(face);
+    FT_Done_FreeType(ft);
+
+    //
+    // Configure VBO for texture quads
+    //
+    glGenBuffers(1, &gTextVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, gTextVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * 6 * 4, NULL, GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), 0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
 int getRandomColorIndex(int colorCount) {
     return (rand() % colorCount);
 }
@@ -446,6 +515,7 @@ void init(string objectFile)
 
     glEnable(GL_DEPTH_TEST);
     initShaders();
+    initFonts(640, 600);
     initVBO();
     for (int i = 0; i < grid.height; i++) {
         for (int j = 0; j < grid.width; j++) {
@@ -473,6 +543,55 @@ void drawModel()
 	glDrawElements(GL_TRIANGLES, gFaces.size() * 3, GL_UNSIGNED_INT, 0);
 }
 
+void renderText(const std::string& text, GLfloat x, GLfloat y, GLfloat scale, glm::vec3 color)
+{
+    // Activate corresponding render state	
+    glUseProgram(gProgram[6]);
+    glUniform3f(glGetUniformLocation(gProgram[6], "textColor"), color.x, color.y, color.z);
+    glActiveTexture(GL_TEXTURE0);
+
+    // Iterate through all characters
+    std::string::const_iterator c;
+    for (c = text.begin(); c != text.end(); c++) 
+    {
+        Character ch = Characters[*c];
+
+        GLfloat xpos = x + ch.Bearing.x * scale;
+        GLfloat ypos = y - (ch.Size.y - ch.Bearing.y) * scale;
+
+        GLfloat w = ch.Size.x * scale;
+        GLfloat h = ch.Size.y * scale;
+
+        // Update VBO for each character
+        GLfloat vertices[6][4] = {
+            { xpos,     ypos + h,   0.0, 0.0 },            
+            { xpos,     ypos,       0.0, 1.0 },
+            { xpos + w, ypos,       1.0, 1.0 },
+
+            { xpos,     ypos + h,   0.0, 0.0 },
+            { xpos + w, ypos,       1.0, 1.0 },
+            { xpos + w, ypos + h,   1.0, 0.0 }           
+        };
+
+        // Render glyph texture over quad
+        glBindTexture(GL_TEXTURE_2D, ch.TextureID);
+
+        // Update content of VBO memory
+        glBindBuffer(GL_ARRAY_BUFFER, gTextVBO);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices); // Be sure to use glBufferSubData and not glBufferData
+
+        //glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        // Render quad
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        // Now advance cursors for next glyph (note that advance is number of 1/64 pixels)
+
+        x += (ch.Advance >> 6) * scale; // Bitshift by 6 to get value in pixels (2^6 = 64 (divide amount of 1/64th pixels by 64 to get amount of pixels))
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void display()
 {
     //cout << grid.score << endl;
@@ -485,12 +604,21 @@ void display()
 	float translate = 0;
 	grid.correctCandyCount = 0;
 
-	if(scaleCoef <= 1.0) {
+    int activeShift = 0;
+    for(int i=0; i<grid.width; i++) {
+        for(int j=0; j<grid.height-1; j++) {
+            if (grid.currentlyShifting[i][j] == 1){
+                activeShift = 1;
+            }
+        }
+    }
+
+	if(scaleCoef <= 1.0 && !activeShift) {
         // start from the leftmost column, check all columns if any points will be earn
         for(int i=0; i<grid.width; i++) {
             int currentStreak = 0;
             for(int j=0; j<grid.height-1; j++) {
-                if(grid.candies[j][i].colorID == grid.candies[j+1][i].colorID && grid.currentlyShifting[j][i] == 0 && grid.currentlyShifting[j+1][i] == 0) {
+                if(grid.candies[j][i].colorID == grid.candies[j+1][i].colorID) {
                     currentStreak++;
                     if(currentStreak == 2) {
                         grid.candies[j-1][i].visible = false;
@@ -509,7 +637,7 @@ void display()
         for(int i=0; i<grid.height; i++) {
             int currentStreak = 0;
             for(int j=0; j<grid.width-1; j++) {
-                if(grid.candies[i][j].colorID == grid.candies[i][j+1].colorID && grid.currentlyShifting[i][j] == 0 && grid.currentlyShifting[i][j+1] == 0) {
+                if(grid.candies[i][j].colorID == grid.candies[i][j+1].colorID) {
                     currentStreak++;
                     if(currentStreak == 2) {
                         grid.candies[i][j-1].visible = false;
@@ -602,6 +730,9 @@ void display()
                 translate = 0;
                 grid.correctCandyCount += 1;
             }
+            glm::vec3 lightPos = glm::vec3((20.00 * (float(j)+0.50f))/grid.width - 10.00f,
+                                                        -(18.50 * (float(i)+0.50f))/grid.height + 10.00f + translate,
+                                                        1.00f);
 
             glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3((20.00 * (float(j)+0.50f))/grid.width - 10.00f,
                                                         -(18.50 * (float(i)+0.50f))/grid.height + 10.00f + translate,
@@ -626,12 +757,15 @@ void display()
             glm::mat4 modelMatInv = glm::transpose(glm::inverse(modelMat));
             glm::mat4 orthoMat = glm::ortho(-10.f, 10.f, -10.f, 10.f, -20.f, 20.f);
 
+            glUniform3fv(glGetUniformLocation(grid.colorMap[i][j], "lightPos"), 1, glm::value_ptr(lightPos));
             glUniformMatrix4fv(glGetUniformLocation(grid.colorMap[i][j], "modelingMat"), 1, GL_FALSE, glm::value_ptr(modelMat));
             glUniformMatrix4fv(glGetUniformLocation(grid.colorMap[i][j], "modelingMatInvTr"), 1, GL_FALSE, glm::value_ptr(modelMatInv));
             glUniformMatrix4fv(glGetUniformLocation(grid.colorMap[i][j], "orthoMat"), 1, GL_FALSE, glm::value_ptr(orthoMat));
 
             drawModel();
 
+            //assert(glGetError() == GL_NO_ERROR);
+            renderText("Score: " + to_string(grid.score) + " Moves: " + to_string(grid.moves), 0, 0, 1, glm::vec3(1, 0, 0));
             //assert(glGetError() == GL_NO_ERROR);
         }
 	}
@@ -667,6 +801,28 @@ void keyboard(GLFWwindow* window, int key, int scancode, int action, int mods)
     {
         glfwSetWindowShouldClose(window, GL_TRUE);
     }
+    else if (key == GLFW_KEY_R && action == GLFW_PRESS)
+    {
+        cout << "R pressed" << endl;
+        for (int i = 0; i < grid.height; i++) {
+            for (int j = 0; j < grid.width; j++) {
+                struct Candy candy;
+                candy.colorID = getRandomColorIndex(6);
+                candy.visible = true;
+                candy.shiftAmount = 0;
+                grid.candies[i][j] = candy;
+                GLuint gluint = gProgram[candy.colorID];
+                grid.colorMap[i][j] = gluint;
+                grid.currentlyShifting[i][j] = 0;
+                //cout << gluint << endl;
+            }
+        }
+        grid.moves = 0;
+        grid.score = 0;
+        grid.correctCandyCount = grid.width * grid.height;
+
+        scaleCoef = 1.0;
+    }
 }
 
 void mainLoop(GLFWwindow* window)
@@ -683,6 +839,13 @@ void mainLoop(GLFWwindow* window)
 // reference: https://www.glfw.org/docs/3.3/input_guide.html#input_mouse
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods){
     if(button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS){
+        for (int i = 0; i < grid.height; i++) {
+            for (int j = 0; j < grid.width; j++) {
+                if(grid.currentlyShifting[i][j] == 1){
+                    return;
+                }
+            }
+        }
         double xpos, ypos;
         glfwGetCursorPos(window, &xpos, &ypos);
         if(ypos <= 555 && scaleCoef <= 1.0){ // en alttaki 45 yazi icin ayrildi
@@ -692,7 +855,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             vector<int> indexes;
             indexes.push_back(clickedCandyYIndex);
             indexes.push_back(clickedCandyXIndex);
-            grid.needToDisappear.push_back(indexes);
             grid.moves += 1;
         }
     }

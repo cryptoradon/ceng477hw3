@@ -1,7 +1,6 @@
 #version 120
 
-vec3 lightPos = vec3(5, 5, 5);
-vec3 eyePos = vec3(0, 0, 0);
+uniform vec3 lightPos;
 
 vec3 I = vec3(2, 2, 2);
 vec3 Iamb = vec3(0.8, 0.8, 0.8);
@@ -17,7 +16,7 @@ void main(void)
 {
 	
 	vec3 L = normalize(lightPos - vec3(fragPos));
-	vec3 V = normalize(eyePos - vec3(fragPos));
+	vec3 V = normalize(lightPos - vec3(fragPos));
 	vec3 H = normalize(L + V);
 	float NdotL = dot(N, L);
 	float NdotH = dot(N, H);

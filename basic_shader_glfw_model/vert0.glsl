@@ -1,7 +1,6 @@
 #version 120 
 
-vec3 lightPos = vec3(5, 5, 5);
-vec3 eyePos = vec3(0, 0, 0);
+uniform vec3 lightPos;
 
 uniform float intensity;
 vec3 I = vec3(intensity, intensity, intensity);
@@ -23,7 +22,7 @@ void main(void)
 	vec4 p = modelingMat * vec4(inVertex, 1); // translate to world coordinates
 	vec3 Lorg = lightPos - vec3(p);
 	vec3 L = normalize(Lorg);
-	vec3 V = normalize(eyePos - vec3(p));
+	vec3 V = normalize(lightPos - vec3(p));
 	vec3 H = normalize(L + V);
 	vec3 N = vec3(modelingMatInvTr * vec4(inNormal, 0)); // provided by the programmer
 	N = normalize(N);
