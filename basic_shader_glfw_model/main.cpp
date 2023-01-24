@@ -28,7 +28,7 @@ float scaleCoef = 1.0;
 struct Candy {
     int colorID;
     bool visible;
-    int shiftAmount;
+    float shiftAmount;
 };
 
 struct {
@@ -39,6 +39,7 @@ struct {
     vector<vector<GLuint>> colorMap; // to slide candies when explosion occur
     int correctCandyCount;
     vector<vector<int>> needToDisappear; // each inside vector holds which candy clicked or need to explode
+    vector<vector<int>> currentlyShifting;
 } grid;
 
 struct Vertex
@@ -455,6 +456,7 @@ void init(string objectFile)
             grid.candies[i][j] = candy;
             GLuint gluint = gProgram[candy.colorID];
             grid.colorMap[i][j] = gluint;
+            grid.currentlyShifting[i][j] = 0;
             //cout << gluint << endl;
         }
     }
@@ -488,7 +490,7 @@ void display()
         for(int i=0; i<grid.width; i++) {
             int currentStreak = 0;
             for(int j=0; j<grid.height-1; j++) {
-                if(grid.candies[j][i].colorID == grid.candies[j+1][i].colorID) {
+                if(grid.candies[j][i].colorID == grid.candies[j+1][i].colorID && grid.currentlyShifting[j][i] == 0 && grid.currentlyShifting[j+1][i] == 0) {
                     currentStreak++;
                     if(currentStreak == 2) {
                         grid.candies[j-1][i].visible = false;
@@ -507,7 +509,7 @@ void display()
         for(int i=0; i<grid.height; i++) {
             int currentStreak = 0;
             for(int j=0; j<grid.width-1; j++) {
-                if(grid.candies[i][j].colorID == grid.candies[i][j+1].colorID) {
+                if(grid.candies[i][j].colorID == grid.candies[i][j+1].colorID && grid.currentlyShifting[i][j] == 0 && grid.currentlyShifting[i][j+1] == 0) {
                     currentStreak++;
                     if(currentStreak == 2) {
                         grid.candies[i][j-1].visible = false;
@@ -584,22 +586,26 @@ void display()
         }
     }
 
+
+    int candyDisappearing = 0;
     //draw model
 	for(int i=0; i<grid.height; i++) {
 	    for(int j=0; j<grid.width; j++) {
             glUseProgram(grid.colorMap[i][j]);
             // translation
             if(grid.candies[i][j].shiftAmount > 0) {
+                grid.currentlyShifting[i][j] = 1;
                 translate = grid.candies[i][j].shiftAmount;
                 grid.candies[i][j].shiftAmount -= 0.05;
             } else {
+                grid.currentlyShifting[i][j] = 0;
                 translate = 0;
                 grid.correctCandyCount += 1;
             }
 
-            glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3((20 * (j+0.5f))/grid.width - 10.0f,
-                                                                   -(18.5 * (i+0.5f))/grid.height + 10.0f + translate,
-                                                                   -10.f));
+            glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3((20.00 * (float(j)+0.50f))/grid.width - 10.00f,
+                                                        -(18.50 * (float(i)+0.50f))/grid.height + 10.00f + translate,
+                                                        0.00f));
 
             // rotation
             glm::mat4 R = glm::rotate(glm::mat4(1.f), glm::radians(angle), glm::vec3(0, 1, 0));
@@ -608,7 +614,7 @@ void display()
             glm::mat4 scaleCoefficient = glm::scale(glm::mat4(1.f), glm::vec3(1.f, 1.f, 1.f));
             if(!grid.candies[i][j].visible) { // if current candy should disappear, than use scaling coef
                 //cout << "were here" << endl;
-                scaleCoef += 0.01;
+                candyDisappearing = 1;
                 scaleCoefficient = glm::scale(glm::mat4(1.f), glm::vec3(scaleCoef, scaleCoef, scaleCoef));
             } else {
                 scaleCoefficient = glm::scale(glm::mat4(1.f), glm::vec3(1.f, 1.f, 1.f));
@@ -631,6 +637,9 @@ void display()
 	}
 
 	angle += 0.5;
+    if(candyDisappearing){
+        scaleCoef += 0.01;
+    }
 }
 
 void reshape(GLFWwindow* window, int w, int h)
@@ -703,9 +712,11 @@ int main(int argc, char** argv)   // Create Main Function For Bringing It All To
     grid.correctCandyCount = grid.width * grid.height;
     grid.candies.resize(grid.height);
     grid.colorMap.resize(grid.height);
+    grid.currentlyShifting.resize(grid.height);
     for (int i = 0; i < grid.height; i++) {
         grid.candies[i].resize(grid.width);
         grid.colorMap[i].resize(grid.width);
+        grid.currentlyShifting[i].resize(grid.width);
     }
 
     GLFWwindow* window;
